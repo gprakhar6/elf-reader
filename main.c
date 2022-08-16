@@ -191,6 +191,20 @@ void print_elf_hdr_64(struct elf64_file *elf)
 	printf("%02X ", elf->ehdr.e_ident[i]);
     }
     printf("\n");
+
+    for(i = 0; i < elf->ehdr.e_phnum; i++) {
+	printf("ph %02d: ", i);
+	printf("%08X %02X %-10ld 0x%016lX 0x%016lX %06lX %06lX %06lX\n",
+               elf->phdr[i].p_type,
+               elf->phdr[i].p_flags,
+               elf->phdr[i].p_offset,
+               elf->phdr[i].p_vaddr,
+               elf->phdr[i].p_paddr,
+               elf->phdr[i].p_filesz,
+               elf->phdr[i].p_memsz,
+               elf->phdr[i].p_align
+	    );
+    }
 }
 
 void read_elf64_file(struct elf64_file *elf)
@@ -209,7 +223,9 @@ void read_elf64_file(struct elf64_file *elf)
 void init_elf64_file(char filename[MAX_LEN_FILENAME],
 		     struct elf64_file *elf) {
 
-    uint16_t phdrsz;
+    int i;
+    uint16_t phentsize, phnum;
+    Elf64_Off phoff;
     
     strncpy(elf->fname, filename, sizeof(elf->fname));
 
@@ -224,12 +240,18 @@ void init_elf64_file(char filename[MAX_LEN_FILENAME],
     read_elf64_file(elf);
     elf->print_elf_hdr = print_elf_hdr_64;
 
-    phdrsz = elf->ehdr.e_phentsize;
+    phoff = elf->ehdr.e_phoff;
+    phentsize = elf->ehdr.e_phentsize;
+    phnum = elf->ehdr.e_phnum;
 
-    if(!within_lmts(&phdrsz, ephdr, &limits[ephdr]))
-	fatal("phdrsz not within limits. phdrsz = 0x%04X\n", phdrsz);
+    if(!within_lmts(&phentsize, ephdr, &limits[ephdr]))
+	fatal("phdrsz not within limits. phdrsz = 0x%04X\n", phentsize);
 
-    
+    elf->phdr = (Elf64_Phdr *)calloc(phnum, sizeof(Elf64_Phdr));
+    if(elf->phdr == NULL)
+	fatal("could not allocate %d of %ld bytes\n", phnum, sizeof(Elf64_Phdr));
+    fread(elf->phdr, sizeof(Elf64_Phdr), phnum, elf->fp);
+
     
 }
 

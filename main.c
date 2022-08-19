@@ -2,7 +2,7 @@
 
 #include "elf-reader.h"
 
-static const char optstring[] = "f:";
+static const char optstring[] = "f:l:";
 static const char default_file[] = "main";
 static const char limit_default_file[] = "limits.txt";
 

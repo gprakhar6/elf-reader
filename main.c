@@ -53,5 +53,8 @@ int main(int argc, char *argv[])
     init_elf64_file(filename, &elf);
 
     elf.print_elf_hdr(&elf);
+    
+    fini_elf64_file(&elf);
+    
     return 0;
 }

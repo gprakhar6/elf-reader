@@ -42,8 +42,8 @@ struct elf64_file {
     void (*print_elf_hdr)(struct elf64_file *elf);
 };
 
-void init_limits(char limit_file[MAX_LEN_FILENAME]);
-void init_elf64_file(char filename[MAX_LEN_FILENAME],
+void init_limits(const char limit_file[MAX_LEN_FILENAME]);
+void init_elf64_file(const char filename[MAX_LEN_FILENAME],
 		     struct elf64_file *elf);
 void fini_elf64_file(struct elf64_file *elf);
 

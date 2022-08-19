@@ -83,6 +83,7 @@ static int within_lmts(void *v, enum data_t type, struct limits *l)
 	// Not possible
 	break;
     }
+    return in_lmt;
 }
 
 void read_limits(enum limits_t limit, char inp[NUM_INPUT_FIELDS][MAX_INPUT_SZ], struct limits *l)
@@ -106,7 +107,7 @@ enum limits_t match_to_limit_type(char *inp)
     return idx;	
 }
 
-void init_limits(char limit_file[MAX_LEN_FILENAME])
+void init_limits(const char limit_file[MAX_LEN_FILENAME])
 {
     FILE *fp;
     int i, j, match;
@@ -174,7 +175,7 @@ void print_elf_hdr_64(struct elf64_file *elf)
     }
 }
 
-void init_elf64_file(char filename[MAX_LEN_FILENAME],
+void init_elf64_file(const char filename[MAX_LEN_FILENAME],
 		     struct elf64_file *elf) {
 
     int i, j;

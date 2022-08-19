@@ -2,23 +2,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/mman.h>
+#include <errno.h>
 #include <elf.h>
 
-#define MAX_LEN_FILENAME (128)
-#define MAX_INPUT_SZ (64)
-#define NUM_INPUT_FIELDS (3)
-#define MAX_SPEC_SZ (8)
-#define MAX_INP_READ_SZ (3)
+#include "elf-reader.h"
 
 #define fatal(s, ...) do {printf("%04d: ", __LINE__); printf(s, ##__VA_ARGS__); exit(1);} while(0)
 #define GEN_LMT(t, v, l, h) ((*(t *)v >= *(t *)l) && (*(t *)v <= *(t *)h))
-
 #define ADD2DSTR(s, i) (&s[i][0])
 
-enum file_status {
-    enum_open = 0,
-    enum_close
-};
 enum limits_t {
     ephdr = 0,
     eshdr,
@@ -35,36 +28,35 @@ struct limits {
     enum data_t type;
 };
 
-struct elf64_file {
-    char fname[MAX_LEN_FILENAME];
-    FILE *fp;
-    enum file_status file_status;
-    unsigned long file_size;
-    Elf64_Ehdr ehdr;
-    Elf64_Phdr *phdr;
-    void (*print_elf_hdr)(struct elf64_file *elf);
-};
-const char optstring[] = "f:";
-const char default_file[] = "main";
-const char limit_default_file[] = "limits.txt";
-const char str_limit_t[limits_t_sz][128] =
+static const char optstring[] = "f:";
+static const char default_file[] = "main";
+static const char limit_default_file[] = "limits.txt";
+static const char str_limit_t[limits_t_sz][128] =
 {
     "ephdr",
     "eshdr",
 };
-const char inp_read_str[limits_t_sz][MAX_INP_READ_SZ] =
+static const char inp_read_str[limits_t_sz][MAX_INP_READ_SZ] =
 {
     [ephdr] = "%d",
     [eshdr] = "%d",
 };
+static const int prot_map[] = {
+    [0] = PROT_NONE,
+    [1] = PROT_EXEC,
+    [2] = PROT_WRITE,
+    [3] = PROT_WRITE | PROT_EXEC,
+    [4] = PROT_READ,
+    [5] = PROT_READ | PROT_EXEC,
+    [6] = PROT_READ | PROT_WRITE,
+    [7] = PROT_READ | PROT_WRITE | PROT_EXEC
+};
 
-void init_elf64_file(char filename[MAX_LEN_FILENAME],
-		     struct elf64_file *elf);
+static int within_lmts(void *v, enum data_t type, struct limits *l);
+static void init_limits(char limit_file[MAX_LEN_FILENAME]);
+static void phex(void *ptr, int b);
 
-int within_lmts(void *v, enum data_t type, struct limits *l);
-void init_limits(char limit_file[MAX_LEN_FILENAME]);
-
-struct limits limits[limits_t_sz];
+static struct limits limits[limits_t_sz];
 
 int main(int argc, char *argv[])
 {
@@ -115,7 +107,20 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-int within_lmts(void *v, enum data_t type, struct limits *l)
+static void phex(void *ptr, int b)
+{
+    int i, j;
+    unsigned char *c = ptr;
+    for(i = 0; i < b; i++) {
+	printf("%02X ", c[i]);
+	if((i+1)%16 == 0)
+	    printf("\n");	
+    }
+    if(i%16 != 0)
+	printf("\n");
+}
+
+static int within_lmts(void *v, enum data_t type, struct limits *l)
 {
     int in_lmt = 0;
 
@@ -154,7 +159,7 @@ enum limits_t match_to_limit_type(char *inp)
     return idx;	
 }
 
-void init_limits(char limit_file[MAX_LEN_FILENAME])
+static void init_limits(char limit_file[MAX_LEN_FILENAME])
 {
     FILE *fp;
     int i, j, match;
@@ -205,25 +210,25 @@ void print_elf_hdr_64(struct elf64_file *elf)
                elf->phdr[i].p_align
 	    );
     }
-}
 
-void read_elf64_file(struct elf64_file *elf)
-{
-    if(elf->file_status == enum_close)
-	fatal("Trying to read closed file %s\n", elf->fname);
-
-    fseek(elf->fp, 0, SEEK_SET);
-    fread(&elf->ehdr, sizeof(elf->ehdr), 1, elf->fp);
-
-    if(elf->ehdr.e_phoff >= elf->file_size)
-	fatal("wrong phoff, phoff= %lu, file size = %lu\n",
-	      elf->ehdr.e_phoff, elf->file_size);
+    printf("Loadable segments are = \n");
+    printf("%-3s %-16s %-6s %-6s %-6s %-6s\n", "Num", "vaddr", "memsz", "filesz",
+	   "npages", "flags");
+    for(i = 0; i < elf->num_regions; i++) {
+	printf("%03d %016lX %06lX %06lX %06X %06X\n",
+	       i,
+	       elf->prog_regions[i]->vaddr,
+	       elf->prog_regions[i]->memsz,
+	       elf->prog_regions[i]->filesz,
+	       elf->prog_regions[i]->num_pages,
+	       elf->prog_regions[i]->flags);
+    }
 }
 
 void init_elf64_file(char filename[MAX_LEN_FILENAME],
 		     struct elf64_file *elf) {
 
-    int i;
+    int i, j;
     uint16_t phentsize, phnum;
     Elf64_Off phoff;
     
@@ -237,7 +242,16 @@ void init_elf64_file(char filename[MAX_LEN_FILENAME],
 
     fseek(elf->fp, 0, SEEK_END);
     elf->file_size = ftell(elf->fp);
-    read_elf64_file(elf);
+    if(elf->file_status == enum_close)
+	fatal("Trying to read closed file %s\n", elf->fname);
+
+    fseek(elf->fp, 0, SEEK_SET);
+    if(fread(&elf->ehdr, sizeof(elf->ehdr), 1, elf->fp) != 1)
+	fatal("Cannot read elf hdr\n");
+
+    if(elf->ehdr.e_phoff >= elf->file_size)
+	fatal("wrong phoff, phoff= %lu, file size = %lu\n",
+	      elf->ehdr.e_phoff, elf->file_size);
     elf->print_elf_hdr = print_elf_hdr_64;
 
     phoff = elf->ehdr.e_phoff;
@@ -249,10 +263,92 @@ void init_elf64_file(char filename[MAX_LEN_FILENAME],
 
     elf->phdr = (Elf64_Phdr *)calloc(phnum, sizeof(Elf64_Phdr));
     if(elf->phdr == NULL)
-	fatal("could not allocate %d of %ld bytes\n", phnum, sizeof(Elf64_Phdr));
-    fread(elf->phdr, sizeof(Elf64_Phdr), phnum, elf->fp);
+	fatal("could not allocate %d of %ld bytes\n",
+	      phnum, sizeof(Elf64_Phdr));
+    if(fread(elf->phdr, sizeof(Elf64_Phdr), phnum, elf->fp) != phnum)
+	fatal("cannot read phdr\n");
 
+    elf->num_regions = 0;
+    for(i = 0; i < phnum; i++) {
+	if(elf->phdr[i].p_type == PT_LOAD) {
+	    elf->num_regions++;
+	}
+    }
+    elf->prog_regions =
+	(struct prog_region **)calloc(elf->num_regions,
+				      sizeof(struct prog_region *));
+    if(elf->prog_regions == NULL)
+	fatal("unexpected");
+    j = 0;
+    for(i = 0; i < phnum; i++) {
+	if(elf->phdr[i].p_type == PT_LOAD) {
+	    elf->prog_regions[j] =
+		(struct prog_region *)malloc(sizeof(struct prog_region));
+	    if(elf->prog_regions[j] == NULL)
+		fatal("not expected\n");
+	    elf->prog_regions[j]->idx = i;
+	    j++;
+	}
+    }
+
+    for(i = 0; i < elf->num_regions; i++) {
+	Elf64_Addr first_page, last_page, dest;
+	uint32_t add, num_pages, flags;
+	size_t rbytes;
+	j = elf->prog_regions[i]->idx;
+	elf->prog_regions[i]->memsz	= elf->phdr[j].p_memsz;
+	elf->prog_regions[i]->filesz	= elf->phdr[j].p_filesz;
+	elf->prog_regions[i]->vaddr	= elf->phdr[j].p_vaddr;
+        flags				= elf->phdr[j].p_flags;
+	elf->prog_regions[i]->flags = flags;
+	first_page = elf->phdr[j].p_vaddr & (~0xFFF);
+	last_page  = (elf->phdr[j].p_vaddr + elf->phdr[j].p_memsz);
+	if((last_page & 0xFFF) == 0)
+	    add = 0;
+	else
+	    add = 1;
+	last_page = last_page & (~0xFFF);
+	
+	num_pages = (last_page - first_page) / PAGE_SIZE + add;
+	elf->prog_regions[i]->num_pages = num_pages;
+	if(elf->prog_regions[i]->vaddr == 0 || num_pages == 0)
+	    continue;
+	elf->prog_regions[i]->addr
+	    = (void *)mmap(NULL, num_pages * PAGE_SIZE,
+			   PROT_READ | PROT_WRITE,
+			   MAP_PRIVATE | MAP_ANONYMOUS,
+			   -1, 0);
+	if(elf->prog_regions[i]->addr == MAP_FAILED)
+	    fatal("mmap returned error %s\n", strerror(errno));
+
+	dest = (Elf64_Addr)elf->prog_regions[i]->addr +
+	    (elf->prog_regions[i]->vaddr & 0xFFF);
+	if(fseek(elf->fp, elf->phdr[j].p_offset , SEEK_SET) == -1)
+	    fatal("cant fseek to %ld\n", elf->phdr[j].p_offset);
+	if((rbytes = fread((void *)dest, elf->phdr[j].p_filesz, 1, elf->fp)) != 1)
+	    fatal("file read failure, rbytes = %ld, filesz = 0x%08lX \n",
+		  rbytes,
+		  elf->phdr[j].p_filesz);
+
+	//printf("LOAD: vaddr = %08llX\n", elf->phdr[j].p_vaddr + elf->phdr[j].p_filesz - 32);
+	//phex(dest + elf->phdr[j].p_filesz - 32, 32);
+	// need to copy the data now
+    }
     
+}
+
+void fini_elf64_file(struct elf64_file *elf)
+{
+    int i;
+    fclose(elf->fp);
+    elf->file_status = enum_close;
+    free(elf->phdr);
+    for(i = 0; i < elf->num_regions; i++) {
+	munmap(elf->prog_regions[i]->addr,
+	       elf->prog_regions[i]->num_pages * PAGE_SIZE);
+	free(elf->prog_regions[i]);
+    }
+    free(elf->prog_regions);
 }
 
 

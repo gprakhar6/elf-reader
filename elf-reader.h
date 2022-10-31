@@ -37,6 +37,8 @@ struct elf64_file {
     unsigned long file_size;
     Elf64_Ehdr ehdr;
     Elf64_Phdr *phdr;
+    Elf64_Shdr *shdr;
+    char *shdrtbl;
     int num_regions;
     struct prog_region **prog_regions;
     void (*print_elf_hdr)(struct elf64_file *elf);

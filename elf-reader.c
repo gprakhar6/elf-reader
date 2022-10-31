@@ -14,7 +14,8 @@
 
 enum limits_t {
     ephdr = 0,
-    eshdr,
+    eshnum,
+    eshdrentsize,
     limits_t_sz
 };
 
@@ -25,18 +26,20 @@ enum data_t {
 
 struct limits {
     char spec[NUM_INPUT_FIELDS - 1][MAX_SPEC_SZ];
-    enum data_t type;
+    //enum data_t type;
 };
 
 static const char str_limit_t[limits_t_sz][128] =
 {
     "ephdr",
-    "eshdr",
+    "eshnum",
+    "eshdrentsize",
 };
 static const char inp_read_str[limits_t_sz][MAX_INP_READ_SZ] =
 {
     [ephdr] = "%d",
-    [eshdr] = "%d",
+    [eshnum] = "%d",
+    [eshdrentsize] = "%d",
 };
 static const int prot_map[] = {
     [0] = PROT_NONE,
@@ -71,7 +74,7 @@ static int within_lmts(void *v, enum data_t type, struct limits *l)
 {
     int in_lmt = 0;
 
-    if((l->type < 0) || (l->type >= data_t_sz))
+    if((type < 0) || (type >= data_t_sz))
 	fatal("wrong data type\n");
 
     switch(type) {
@@ -179,8 +182,8 @@ void init_elf64_file(const char filename[MAX_LEN_FILENAME],
 		     struct elf64_file *elf) {
 
     int i, j;
-    uint16_t phentsize, phnum;
-    Elf64_Off phoff;
+    uint16_t phentsize, phnum, shentsize, shnum, shstrndx;
+    Elf64_Off phoff, shoff;
     
     strncpy(elf->fname, filename, sizeof(elf->fname));
 
@@ -208,7 +211,7 @@ void init_elf64_file(const char filename[MAX_LEN_FILENAME],
     phentsize = elf->ehdr.e_phentsize;
     phnum = elf->ehdr.e_phnum;
 
-    if(!within_lmts(&phentsize, ephdr, &limits[ephdr]))
+    if(!within_lmts(&phentsize, euint16_t, &limits[ephdr]))
 	fatal("phdrsz not within limits. phdrsz = 0x%04X\n", phentsize);
 
     elf->phdr = (Elf64_Phdr *)calloc(phnum, sizeof(Elf64_Phdr));
@@ -275,14 +278,57 @@ void init_elf64_file(const char filename[MAX_LEN_FILENAME],
 	    (elf->prog_regions[i]->vaddr & 0xFFF);
 	if(fseek(elf->fp, elf->phdr[j].p_offset , SEEK_SET) == -1)
 	    fatal("cant fseek to %ld\n", elf->phdr[j].p_offset);
-	if((rbytes = fread((void *)dest, elf->phdr[j].p_filesz, 1, elf->fp)) != 1)
-	    fatal("file read failure, rbytes = %ld, filesz = 0x%08lX \n",
-		  rbytes,
-		  elf->phdr[j].p_filesz);
-
+	if(elf->phdr[j].p_filesz != 0) {
+	    if((rbytes = fread((void *)dest, elf->phdr[j].p_filesz, 1, elf->fp)) != 1)
+		fatal("file read failure, proghdrnum = %d, rbytes = %ld, filesz = 0x%08lX \n",
+		      j,
+		      rbytes,
+		      elf->phdr[j].p_filesz);
+	}
 	//printf("LOAD: vaddr = %08llX\n", elf->phdr[j].p_vaddr + elf->phdr[j].p_filesz - 32);
 	//phex(dest + elf->phdr[j].p_filesz - 32, 32);
 	// need to copy the data now
+    }
+
+    {
+	shoff		= elf->ehdr.e_shoff;
+	shentsize	= elf->ehdr.e_shentsize;
+	shnum		= elf->ehdr.e_shnum;
+	shstrndx	= elf->ehdr.e_shstrndx;
+	if(!within_lmts(&shentsize, euint16_t, &limits[eshdrentsize]))
+	    fatal("shdrentsize not within limits. shdrentsize = 0x%04X\n", shentsize);
+
+	if(shstrndx < 0 || shstrndx >= shnum)
+	    fatal("shstrndx not in table range");
+
+	if(!within_lmts(&shnum, euint16_t, &limits[eshnum]))
+	    fatal("shnum not within limits. shnum = 0x%04X\n", shnum);
+	
+	if(shentsize != sizeof(Elf64_Shdr))
+	    fatal("shentsize != sizeof(Elf64_Shdr), sth is fishy\n");
+	elf->shdr = (Elf64_Shdr *)calloc(shnum, sizeof(Elf64_Shdr));
+	if(elf->shdr == NULL)
+	    fatal("could not allocate %d of %ld bytes\n",
+		  shnum, sizeof(Elf64_Shdr));
+
+	fseek(elf->fp, shoff, SEEK_SET);
+	if(fread(elf->shdr, sizeof(Elf64_Shdr), shnum, elf->fp) != shnum)
+	    fatal("cannot read shdr\n");
+	elf->shdrtbl = (char *)malloc(elf->shdr[shstrndx].sh_size);
+	if(elf->shdrtbl == NULL)
+	    fatal("Cannot allocate shdr string table\n");
+
+	fseek(elf->fp, elf->shdr[shstrndx].sh_offset, SEEK_SET);
+	if(fread(elf->shdrtbl, elf->shdr[shstrndx].sh_size, 1, elf->fp) != 1)
+	    fatal("cannot read shdrtbl\n");
+
+	for(i = 0; i < shnum; i++) {
+	    int idx;
+	    idx = elf->shdr[i].sh_name;
+	    if(strcmp(&elf->shdrtbl[idx], ".stack") == 0) {
+		printf("match exist in %d\n", i);
+	    }
+	}
     }
     
 }
@@ -293,6 +339,8 @@ void fini_elf64_file(struct elf64_file *elf)
     fclose(elf->fp);
     elf->file_status = enum_close;
     free(elf->phdr);
+    free(elf->shdr);
+    free(elf->shdrtbl);
     for(i = 0; i < elf->num_regions; i++) {
 	munmap(elf->prog_regions[i]->addr,
 	       elf->prog_regions[i]->num_pages * PAGE_SIZE);

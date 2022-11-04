@@ -314,14 +314,16 @@ void init_elf64_file(const char filename[MAX_LEN_FILENAME],
 	fseek(elf->fp, shoff, SEEK_SET);
 	if(fread(elf->shdr, sizeof(Elf64_Shdr), shnum, elf->fp) != shnum)
 	    fatal("cannot read shdr\n");
-	elf->shdrtbl = (char *)malloc(elf->shdr[shstrndx].sh_size);
-	if(elf->shdrtbl == NULL)
+	elf->shstrtbl_size = elf->shdr[shstrndx].sh_size;
+	elf->shstrtbl = (char *)malloc(elf->shstrtbl_size);
+	if(elf->shstrtbl == NULL)
 	    fatal("Cannot allocate shdr string table\n");
 
 	fseek(elf->fp, elf->shdr[shstrndx].sh_offset, SEEK_SET);
-	if(fread(elf->shdrtbl, elf->shdr[shstrndx].sh_size, 1, elf->fp) != 1)
+	if(fread(elf->shstrtbl, elf->shstrtbl_size, 1, elf->fp) != 1)
 	    fatal("cannot read shdrtbl\n");
 
+#if 0	
 	for(i = 0; i < shnum; i++) {
 	    int idx;
 	    idx = elf->shdr[i].sh_name;
@@ -329,6 +331,7 @@ void init_elf64_file(const char filename[MAX_LEN_FILENAME],
 		printf("match exist in %d\n", i);
 	    }
 	}
+#endif	
     }
     
 }
@@ -340,7 +343,7 @@ void fini_elf64_file(struct elf64_file *elf)
     elf->file_status = enum_close;
     free(elf->phdr);
     free(elf->shdr);
-    free(elf->shdrtbl);
+    free(elf->shstrtbl);
     for(i = 0; i < elf->num_regions; i++) {
 	munmap(elf->prog_regions[i]->addr,
 	       elf->prog_regions[i]->num_pages * PAGE_SIZE);

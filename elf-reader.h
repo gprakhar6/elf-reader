@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <errno.h>
 #include <elf.h>
 
@@ -33,9 +34,12 @@ struct prog_region {
 struct elf64_file {
     char fname[MAX_LEN_FILENAME];
     FILE *fp;
+    int fd;
+    struct stat stat;
+    void *mm; // mmap'ed file
     enum file_status file_status;
     unsigned long file_size;
-    Elf64_Ehdr ehdr;
+    Elf64_Ehdr *ehdr;
     Elf64_Phdr *phdr;
     Elf64_Shdr *shdr;
     char *shstrtbl;

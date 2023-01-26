@@ -46,14 +46,29 @@ struct elf64_file {
     Elf64_Shdr *shdr;
     char *shstrtbl;
     int shstrtbl_size;
+    char *strtbl;
+    int strtbl_size;    
     char *dynstrtbl;
     int dynstrtbl_size;
     Elf64_Sym *dynsyms;
-    int dynsyms_sz;
+    int dynsyms_size;
+    Elf64_Rela *rela;
+    int rela_size;
+    Elf64_Dyn *dynamic;
+    int dynamic_size;
     int num_regions;
     struct prog_region **prog_regions;
     void (*print_elf_hdr)(struct elf64_file *elf);
 };
+
+typedef struct {
+    uint64_t offset;    // where to apply
+    uint64_t sym_value; // what value to apply
+    uint64_t sz;        // size of the object
+    uint64_t addend;
+    uint32_t type;
+    char *name;    
+} relocs_t;
 
 void init_limits(const char limit_file[MAX_LEN_FILENAME]);
 void init_elf64_file(const char filename[MAX_LEN_FILENAME],
@@ -64,4 +79,9 @@ void fini_elf64_file(struct elf64_file *elf);
 /****************************************************/
 Elf64_Shdr* get_shdr(struct elf64_file *elf, char *name);
 Elf64_Shdr* iterate_shdr(struct elf64_file *elf, int *ct);
+Elf64_Sym* dynsym(struct elf64_file *elf, char name[]);
+int iterate_rel(struct elf64_file *elf, relocs_t *rel, int *idx);
+void print_relocs(struct elf64_file *elf);
+int iterate_needed_libs(struct elf64_file *elf, char **name, int *idx);
+void print_needed_libs(struct elf64_file *elf);
 #endif

@@ -29,6 +29,7 @@ struct limits {
     //enum data_t type;
 };
 
+static const char elf_mag[] = {ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3};
 static const char str_limit_t[limits_t_sz][128] =
 {
     "ephdr",
@@ -206,6 +207,13 @@ void init_elf64_file(const char filename[MAX_LEN_FILENAME],
 
     if(elf->mm == NULL)
 	fatal("elf mmap failed\n");
+
+    // check for magic word
+    for(i = 0; i < 4; i++)
+	if(((char *)elf->mm)[i] != elf_mag[i])
+	    fatal("%s in not elf file, %02X, %02X\n", elf->fname,
+		  ((char *)elf->mm)[i], elf_mag[i]);
+    
     //printf("first elf = %08lX\n", *((uint64_t *)elf->mm));
     fseek(elf->fp, 0, SEEK_END);
     elf->file_size = elf->stat.st_size;
@@ -300,21 +308,52 @@ void init_elf64_file(const char filename[MAX_LEN_FILENAME],
 	elf->shstrtbl = (char *)((uint64_t)(elf->mm) + (uint64_t)(elf->shdr[shstrndx].sh_offset));
 	shdr = get_shdr(elf, ".dynsym");
 	if(shdr != NULL) {
-	    elf->dynsyms_sz = (shdr->sh_size) / (shdr->sh_entsize);
+	    elf->dynsyms_size = (shdr->sh_size) / (shdr->sh_entsize);
 	    elf->dynsyms = (typeof(elf->dynsyms))((uint64_t)(elf->mm) + (uint64_t)(shdr->sh_offset));
 	}
 	else {
+	    elf->dynsyms_size = 0;
 	    elf->dynsyms = NULL;
-	    elf->dynsyms_sz = 0;
 	}
 	shdr = get_shdr(elf, ".dynstr");
 	if(shdr != NULL) {
 	    elf->dynstrtbl_size = shdr->sh_size;
 	    elf->dynstrtbl = (typeof(elf->dynstrtbl))((uint64_t)(elf->mm) + (uint64_t)(shdr->sh_offset));
+	} else {
+	    elf->dynstrtbl_size = 0;
+	    elf->dynstrtbl = NULL;
+	}
+	// TBD what about .rel.dyn? how to handle?
+	shdr = get_shdr(elf, ".rela.dyn");
+	if(shdr != NULL) {
+	    elf->rela_size = (shdr->sh_size) / (shdr->sh_entsize);
+	    elf->rela = (typeof(elf->rela))((uint64_t)(elf->mm) + (uint64_t)(shdr->sh_offset));
 	}
 	else {
+	    elf->rela_size = 0;
+	    elf->rela = NULL;
 	}
 
+	shdr = get_shdr(elf, ".dynamic");
+	if(shdr != NULL) {
+	    elf->dynamic_size = (shdr->sh_size) / (shdr->sh_entsize);
+	    elf->dynamic = (typeof(elf->dynamic))((uint64_t)(elf->mm) + (uint64_t)(shdr->sh_offset));
+	}
+	else {
+	    elf->dynamic_size = 0;
+	    elf->dynamic = NULL;
+	}
+	
+	shdr = get_shdr(elf, ".strtab");
+	if(shdr != NULL) {
+	    elf->strtbl_size = (shdr->sh_size);
+	    elf->strtbl = (typeof(elf->strtbl))((uint64_t)(elf->mm) + (uint64_t)(shdr->sh_offset));
+	}
+	else {
+	    elf->strtbl_size = 0;
+	    elf->strtbl = NULL;
+	}
+	
 #if 0	
 	for(i = 0; i < shnum; i++) {
 	    int idx;
@@ -375,4 +414,128 @@ Elf64_Shdr* iterate_shdr(struct elf64_file *elf, int *ct)
 	return &(elf->shdr[*ct]);
     }
     return NULL;
+}
+
+// ret
+Elf64_Sym* dynsym_l0(Elf64_Sym *syms, int sz,
+			  char *dynstr, char name[])
+{
+    int i, idx;
+    Elf64_Sym *sym = (Elf64_Sym *)-1;
+    for(i = 0; i < sz; i++) {
+	idx = syms[i].st_name;
+	if(idx != 0) {
+	    if(strcmp(name, &dynstr[idx]) == 0) {
+		sym = &syms[i];
+		break;
+	    }
+	}
+    }
+    return sym;
+}
+
+Elf64_Sym* dynsym(struct elf64_file *elf, char name[])
+{
+    return dynsym_l0(elf->dynsyms, elf->dynsyms_size,
+		     elf->dynstrtbl, name);
+}
+
+char *dynsym_name(Elf64_Sym *sym, char *dynstrtbl) {
+    return &(dynstrtbl[sym->st_name]);
+}
+
+// iterate over rel symbols
+int iterate_rel(struct elf64_file *elf, relocs_t *rel, int *idx)
+{
+    int i, dynidx;
+    Elf64_Rela *rela;
+    Elf64_Sym *sym;
+    if(idx == NULL)
+	return -1;
+    i = *idx;
+    if(!(i >= 0 && i < elf->rela_size) || (rel == NULL))
+	return -1;
+    rela = &(elf->rela[i]);
+
+    rel->offset = rela->r_offset;
+    rel->type = ELF64_R_TYPE(rela->r_info);
+    dynidx = ELF64_R_SYM(rela->r_info);
+    sym = &(elf->dynsyms[dynidx]);
+    rel->sym_value = sym->st_value;
+    rel->sz = sym->st_size;
+    rel->name = dynsym_name(sym, elf->dynstrtbl);
+    rel->addend = rela->r_addend;
+    
+    return (*idx)++;
+}
+static const char sym_type[][64] = {
+    [0] = "R_X86_64_NONE",           
+    [1] = "R_X86_64_64",             
+    [2] = "R_X86_64_PC32",           
+    [3] = "R_X86_64_GOT32",          
+    [4] = "R_X86_64_PLT32",          
+    [5] = "R_X86_64_COPY",           
+    [6] = "R_X86_64_GLOB_DAT",       
+    [7] = "R_X86_64_JUMP_SLOT",      
+    [8] = "R_X86_64_RELATIVE",       
+    [9] = "R_X86_64_GOTPCREL",       
+    [10] = "R_X86_64_32",             
+    [11] = "R_X86_64_32S",            
+    [12] = "R_X86_64_16",             
+    [13] = "R_X86_64_PC16",           
+    [14] = "R_X86_64_8",              
+    [15] = "R_X86_64_PC8",
+    [16 ... 23] = "",
+    [24] = "R_X86_64_PC64",
+};
+void print_relocs(struct elf64_file *elf)
+{
+    int idx;
+    relocs_t rel;
+    idx = 0;
+    printf("%-16s %-16s %-16s %-4s %-4s %-16s\n",
+	   "name", "offset", "sym_value", "sz",
+	   "adnd", "sym_type");
+    while(iterate_rel(elf, &rel, &idx) != -1){
+	printf("%-16s %016lX %016lX %04ld %04ld %-16s\n",
+	       rel.name, rel.offset, rel.sym_value, rel.sz,
+	       rel.addend, &sym_type[rel.type][0]);
+    }
+    printf("\n");
+}
+
+int iterate_needed_libs(struct elf64_file *elf, char **name, int *idx)
+{
+    int i, ret;
+    Elf64_Dyn *dyn;
+    if(idx == NULL)
+	return -1;
+    i = *idx;
+    if(!(i >= 0 && i < elf->dynamic_size))
+	return -1;
+
+    ret = -1;
+    while(i < elf->dynamic_size) {
+	dyn = &(elf->dynamic[i]);
+	if (dyn->d_tag == DT_NEEDED) {
+	    *name = &(elf->dynstrtbl[dyn->d_un.d_val]);
+	    i++;
+	    *idx = ret = i;
+	    break;
+	}
+	i++;
+    }
+    
+    return ret;
+}
+
+void print_needed_libs(struct elf64_file *elf)
+{
+    char *name;
+    int idx;
+    idx = 0;
+    while(iterate_needed_libs(elf, &name, &idx) != -1) {
+	printf("%s, ", name);
+    }
+    printf("\n");
 }

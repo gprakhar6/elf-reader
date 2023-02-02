@@ -82,6 +82,7 @@ Elf64_Shdr* iterate_shdr(struct elf64_file *elf, int *ct);
 Elf64_Sym* dynsym(struct elf64_file *elf, char name[]);
 int iterate_rel(struct elf64_file *elf, relocs_t *rel, int *idx);
 void print_relocs(struct elf64_file *elf);
+// returns -1 on completion
 int iterate_needed_libs(struct elf64_file *elf, char **name, int *idx);
 void print_needed_libs(struct elf64_file *elf);
 #endif

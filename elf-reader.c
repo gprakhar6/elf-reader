@@ -461,6 +461,7 @@ int iterate_rel(struct elf64_file *elf, relocs_t *rel, int *idx)
     rel->type = ELF64_R_TYPE(rela->r_info);
     dynidx = ELF64_R_SYM(rela->r_info);
     sym = &(elf->dynsyms[dynidx]);
+    rel->dynsym = sym;
     rel->sym_value = sym->st_value;
     rel->sz = sym->st_size;
     rel->name = dynsym_name(sym, elf->dynstrtbl);

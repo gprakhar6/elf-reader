@@ -67,6 +67,7 @@ typedef struct {
     uint64_t sz;        // size of the object
     uint64_t addend;
     uint32_t type;
+    Elf64_Sym *dynsym;
     char *name;    
 } relocs_t;
 
